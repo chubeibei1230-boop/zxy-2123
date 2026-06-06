@@ -158,7 +158,18 @@ def get_pending_review_count(
     }
 
 
-@router.get("/conflict-bookings", response_model=schemas.ConflictBookingStatsResponse)
+class ConflictBookingRecordExtended(schemas.ConflictBookingRecord):
+    has_reassignment: bool = False
+    latest_reassignment_status: Optional[str] = None
+    reassignment_count: int = 0
+
+
+class ConflictBookingStatsResponseExtended(schemas.ConflictBookingStatsResponse):
+    records: List[ConflictBookingRecordExtended]
+    resolved_by_reassignment: int = 0
+
+
+@router.get("/conflict-bookings", response_model=ConflictBookingStatsResponseExtended)
 def get_conflict_bookings_stats(
     start_date: Optional[str] = Query(None, description="开始日期 YYYY-MM-DD"),
     end_date: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD"),
@@ -207,8 +218,23 @@ def get_conflict_bookings_stats(
         resolved_at = None
         recommended_solution = None
         
+        reassignments = crud.get_reassignments(db, booking_id=booking.id)
+        has_reassignment = len(reassignments) > 0
+        latest_reassignment_status = None
+        if reassignments:
+            latest_reassignment = max(reassignments, key=lambda r: r.operated_at)
+            latest_reassignment_status = latest_reassignment.status
+        
         if booking.status == "conflict":
-            resolution_status = "pending"
+            if has_reassignment and latest_reassignment_status in ["pending", "conflict"]:
+                resolution_status = "pending_reassignment"
+            elif has_reassignment and latest_reassignment_status == "approved":
+                resolution_status = "resolved_by_reassignment"
+                resolved_at = latest_reassignment.review_time
+            elif has_reassignment and latest_reassignment_status == "rejected":
+                resolution_status = "pending"
+            else:
+                resolution_status = "pending"
         elif booking.status == "approved":
             if booking.conflict_info:
                 resolution_status = "resolved_with_conflict"
@@ -244,7 +270,7 @@ def get_conflict_bookings_stats(
             except Exception:
                 pass
         
-        record = schemas.ConflictBookingRecord(
+        record = ConflictBookingRecordExtended(
             id=booking.id,
             type="预约",
             title=booking.title,
@@ -259,7 +285,10 @@ def get_conflict_bookings_stats(
             recommended_solution=recommended_solution,
             resolution_status=resolution_status,
             resolved_at=resolved_at,
-            created_at=booking.created_at
+            created_at=booking.created_at,
+            has_reassignment=has_reassignment,
+            latest_reassignment_status=latest_reassignment_status,
+            reassignment_count=len(reassignments)
         )
         records.append(record)
     
@@ -286,8 +315,23 @@ def get_conflict_bookings_stats(
         resolved_at = None
         recommended_solution = None
         
+        reassignments = crud.get_reassignments(db, change_id=change.id)
+        has_reassignment = len(reassignments) > 0
+        latest_reassignment_status = None
+        if reassignments:
+            latest_reassignment = max(reassignments, key=lambda r: r.operated_at)
+            latest_reassignment_status = latest_reassignment.status
+        
         if change.status == "conflict":
-            resolution_status = "pending"
+            if has_reassignment and latest_reassignment_status in ["pending", "conflict"]:
+                resolution_status = "pending_reassignment"
+            elif has_reassignment and latest_reassignment_status == "approved":
+                resolution_status = "resolved_by_reassignment"
+                resolved_at = latest_reassignment.review_time
+            elif has_reassignment and latest_reassignment_status == "rejected":
+                resolution_status = "pending"
+            else:
+                resolution_status = "pending"
         elif change.status == "approved":
             if change.conflict_info:
                 resolution_status = "resolved_with_conflict"
@@ -324,7 +368,7 @@ def get_conflict_bookings_stats(
             except Exception:
                 pass
         
-        record = schemas.ConflictBookingRecord(
+        record = ConflictBookingRecordExtended(
             id=change.id,
             type="变更",
             title=change.new_title if change.new_title else (change.old_title or "变更申请"),
@@ -339,7 +383,10 @@ def get_conflict_bookings_stats(
             recommended_solution=recommended_solution,
             resolution_status=resolution_status,
             resolved_at=resolved_at,
-            created_at=change.created_at
+            created_at=change.created_at,
+            has_reassignment=has_reassignment,
+            latest_reassignment_status=latest_reassignment_status,
+            reassignment_count=len(reassignments)
         )
         records.append(record)
     
@@ -350,8 +397,9 @@ def get_conflict_bookings_stats(
     pending_count = total_conflicts - resolved_count
     resolved_with_conflict = sum(1 for r in records if r.resolution_status == "resolved_with_conflict")
     resolved_by_rejection = sum(1 for r in records if r.resolution_status == "resolved_rejected")
+    resolved_by_reassignment = sum(1 for r in records if r.resolution_status == "resolved_by_reassignment")
     
-    return schemas.ConflictBookingStatsResponse(
+    return ConflictBookingStatsResponseExtended(
         start_date=start_dt,
         end_date=end_dt,
         total_conflicts=total_conflicts,
@@ -359,5 +407,6 @@ def get_conflict_bookings_stats(
         pending_count=pending_count,
         resolved_with_conflict=resolved_with_conflict,
         resolved_by_rejection=resolved_by_rejection,
-        records=records
+        records=records,
+        resolved_by_reassignment=resolved_by_reassignment
     )

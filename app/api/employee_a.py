@@ -488,3 +488,329 @@ def get_my_changes(
         skip=skip,
         limit=limit
     )
+
+
+@router.post("/bookings", response_model=schemas.BookingWithRecommendationResponse)
+def create_booking(
+    booking: schemas.BookingCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role(["admin", "employee_a"]))
+):
+    errors = []
+    room = crud.get_meeting_room(db, room_id=booking.room_id)
+    if not room:
+        errors.append("会议室不存在")
+    if booking.start_time >= booking.end_time:
+        errors.append("结束时间必须晚于开始时间")
+    if booking.attendee_count <= 0:
+        errors.append("参会人数必须大于0")
+    
+    department = crud.get_department(db, dept_id=booking.department_id)
+    if not department:
+        errors.append("部门不存在")
+    
+    if room:
+        if booking.attendee_count > room.capacity:
+            errors.append(f"参会人数({booking.attendee_count})超过会议室容量({room.capacity})")
+        
+        if booking.equipments:
+            from app.core.recommendation import check_room_equipment_match
+            equip_ok, equip_issues = check_room_equipment_match(db, room, booking.equipments)
+            if not equip_ok:
+                errors.extend(equip_issues)
+    
+    rule = crud.get_active_booking_rule(db)
+    if rule and booking.start_time and booking.end_time:
+        start_time_only = booking.start_time.time()
+        end_time_only = booking.end_time.time()
+        rule_start = datetime.strptime(rule.start_time_limit, "%H:%M").time()
+        rule_end = datetime.strptime(rule.end_time_limit, "%H:%M").time()
+        if start_time_only < rule_start or end_time_only > rule_end:
+            errors.append(f"预约时间需在 {rule.start_time_limit} - {rule.end_time_limit} 之间")
+        
+        if not rule.allow_weekend:
+            if booking.start_time.weekday() >= 5 or booking.end_time.weekday() >= 5:
+                errors.append("不允许周末预约")
+        
+        duration_hours = (booking.end_time - booking.start_time).total_seconds() / 3600
+        if duration_hours < rule.min_booking_hours:
+            errors.append(f"预约时长不足最短时长 {rule.min_booking_hours} 小时")
+        if duration_hours > rule.max_booking_hours:
+            errors.append(f"预约时长超过最长时长 {rule.max_booking_hours} 小时")
+        
+        days_ahead = (booking.start_time.date() - datetime.utcnow().date()).days
+        if days_ahead > rule.max_booking_days:
+            errors.append(f"最多可提前 {rule.max_booking_days} 天预约")
+        
+        if rule.max_attendees_per_room and booking.attendee_count > rule.max_attendees_per_room:
+            errors.append(f"参会人数超过最大限制 {rule.max_attendees_per_room} 人")
+    
+    has_conflict = False
+    conflicts = []
+    if room:
+        has_conflict, conflicts = crud.check_time_conflict(db, booking.room_id, booking.start_time, booking.end_time)
+        if has_conflict:
+            errors.extend(conflicts)
+    
+    if errors:
+        recommendations = generate_recommendations(
+            db=db,
+            original_room_id=booking.room_id,
+            original_start=booking.start_time,
+            original_end=booking.end_time,
+            attendee_count=booking.attendee_count,
+            department_id=booking.department_id,
+            required_equipments=booking.equipments,
+            max_recommendations=5,
+            title_keywords=booking.title
+        )
+        return schemas.BookingWithRecommendationResponse(
+            success=False,
+            errors=errors,
+            recommendations=recommendations
+        )
+    
+    db_booking = crud.create_booking(
+        db=db,
+        booking=booking,
+        applicant_id=current_user.id
+    )
+    
+    if db_booking.status == "conflict":
+        recommendations = generate_recommendations(
+            db=db,
+            original_room_id=db_booking.room_id,
+            original_start=db_booking.start_time,
+            original_end=db_booking.end_time,
+            attendee_count=db_booking.attendee_count,
+            department_id=db_booking.department_id,
+            required_equipments=[
+                schemas.BookingEquipmentCreate(
+                    equipment_id=eq.equipment_id,
+                    quantity=eq.quantity
+                ) for eq in db_booking.equipments
+            ],
+            exclude_booking_id=db_booking.id,
+            max_recommendations=5,
+            title_keywords=db_booking.title
+        )
+        return schemas.BookingWithRecommendationResponse(
+            success=True,
+            booking=db_booking,
+            recommendations=recommendations
+        )
+    
+    return schemas.BookingWithRecommendationResponse(
+        success=True,
+        booking=db_booking
+    )
+
+
+@router.post("/reassignments", response_model=schemas.ReassignmentWithDetailsResponse)
+def select_reassignment(
+    request: schemas.ReassignmentSelectRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role(["admin", "employee_a"]))
+):
+    if request.booking_id:
+        booking = crud.get_booking(db, booking_id=request.booking_id)
+        if not booking:
+            raise HTTPException(status_code=404, detail="预约不存在")
+        if booking.applicant_id != current_user.id and current_user.role != "admin":
+            raise HTTPException(status_code=403, detail="无权操作他人的预约")
+        can_reassign, reason = crud.can_be_reassigned(db, booking)
+        if not can_reassign:
+            raise HTTPException(status_code=400, detail=reason)
+    
+    if request.change_id:
+        change = crud.get_booking_change(db, change_id=request.change_id)
+        if not change:
+            raise HTTPException(status_code=404, detail="变更申请不存在")
+        if change.applicant_id != current_user.id and current_user.role != "admin":
+            raise HTTPException(status_code=403, detail="无权操作他人的变更申请")
+        if change.status not in ["pending", "conflict"]:
+            raise HTTPException(status_code=400, detail="该变更申请状态不允许改派")
+    
+    reassignment = crud.create_reassignment(db, request, operator_id=current_user.id)
+    
+    original_booking = None
+    original_change = None
+    original_occupancy = None
+    
+    if reassignment.booking_id:
+        original_booking = reassignment.booking
+    if reassignment.change_id:
+        original_change = reassignment.change
+    if reassignment.occupancy_id:
+        original_occupancy = reassignment.occupancy
+    
+    adopted_solution = schemas.RecommendationItem(
+        room=schemas.MeetingRoomResponse(
+            id=reassignment.reassigned_room.id,
+            name=reassignment.reassigned_room.name,
+            capacity=reassignment.reassigned_room.capacity,
+            location=reassignment.reassigned_room.location,
+            description=reassignment.reassigned_room.description,
+            is_active=reassignment.reassigned_room.is_active,
+            equipments=[
+                schemas.RoomEquipmentResponse(
+                    id=re.id,
+                    equipment_id=re.equipment_id,
+                    quantity=re.quantity,
+                    equipment=schemas.EquipmentResponse(
+                        id=re.equipment.id,
+                        name=re.equipment.name,
+                        description=re.equipment.description
+                    )
+                ) for re in reassignment.reassigned_room.equipments
+            ]
+        ),
+        start_time=reassignment.reassigned_start_time,
+        end_time=reassignment.reassigned_end_time,
+        match_score=reassignment.match_score or 0,
+        reasons=reassignment.recommendation_reasons.split("; ") if reassignment.recommendation_reasons else [],
+        is_same_room=(reassignment.original_room_id == reassignment.reassigned_room_id),
+        is_same_time=(abs((reassignment.reassigned_start_time - reassignment.original_start_time).total_seconds()) < 60)
+    )
+    
+    return schemas.ReassignmentWithDetailsResponse(
+        reassignment=schemas.ReassignmentResponse(
+            id=reassignment.id,
+            booking_id=reassignment.booking_id,
+            change_id=reassignment.change_id,
+            occupancy_id=reassignment.occupancy_id,
+            source_type=reassignment.source_type,
+            original_room_id=reassignment.original_room_id,
+            original_room=schemas.MeetingRoomResponse(
+                id=reassignment.original_room.id,
+                name=reassignment.original_room.name,
+                capacity=reassignment.original_room.capacity,
+                location=reassignment.original_room.location,
+                description=reassignment.original_room.description,
+                is_active=reassignment.original_room.is_active,
+                equipments=[
+                    schemas.RoomEquipmentResponse(
+                        id=re.id,
+                        equipment_id=re.equipment_id,
+                        quantity=re.quantity,
+                        equipment=schemas.EquipmentResponse(
+                            id=re.equipment.id,
+                            name=re.equipment.name,
+                            description=re.equipment.description
+                        )
+                    ) for re in reassignment.original_room.equipments
+                ]
+            ) if reassignment.original_room else None,
+            original_start_time=reassignment.original_start_time,
+            original_end_time=reassignment.original_end_time,
+            original_attendee_count=reassignment.original_attendee_count,
+            reassigned_room_id=reassignment.reassigned_room_id,
+            reassigned_room=schemas.MeetingRoomResponse(
+                id=reassignment.reassigned_room.id,
+                name=reassignment.reassigned_room.name,
+                capacity=reassignment.reassigned_room.capacity,
+                location=reassignment.reassigned_room.location,
+                description=reassignment.reassigned_room.description,
+                is_active=reassignment.reassigned_room.is_active,
+                equipments=[
+                    schemas.RoomEquipmentResponse(
+                        id=re.id,
+                        equipment_id=re.equipment_id,
+                        quantity=re.quantity,
+                        equipment=schemas.EquipmentResponse(
+                            id=re.equipment.id,
+                            name=re.equipment.name,
+                            description=re.equipment.description
+                        )
+                    ) for re in reassignment.reassigned_room.equipments
+                ]
+            ) if reassignment.reassigned_room else None,
+            reassigned_start_time=reassignment.reassigned_start_time,
+            reassigned_end_time=reassignment.reassigned_end_time,
+            reassigned_attendee_count=reassignment.reassigned_attendee_count,
+            conflict_reasons=reassignment.conflict_reasons,
+            recommendation_index=reassignment.recommendation_index,
+            match_score=reassignment.match_score,
+            recommendation_reasons=reassignment.recommendation_reasons,
+            operator_id=reassignment.operator_id,
+            operator=schemas.UserResponse(
+                id=reassignment.operator.id,
+                username=reassignment.operator.username,
+                full_name=reassignment.operator.full_name,
+                role=reassignment.operator.role,
+                department_id=reassignment.operator.department_id,
+                is_active=reassignment.operator.is_active
+            ) if reassignment.operator else None,
+            operated_at=reassignment.operated_at,
+            processing_note=reassignment.processing_note,
+            status=reassignment.status,
+            reviewer_id=reassignment.reviewer_id,
+            reviewer=schemas.UserResponse(
+                id=reassignment.reviewer.id,
+                username=reassignment.reviewer.username,
+                full_name=reassignment.reviewer.full_name,
+                role=reassignment.reviewer.role,
+                department_id=reassignment.reviewer.department_id,
+                is_active=reassignment.reviewer.is_active
+            ) if reassignment.reviewer else None,
+            review_time=reassignment.review_time,
+            review_comment=reassignment.review_comment,
+            equipment_diffs=[
+                schemas.ReassignmentEquipmentDiffResponse(
+                    id=diff.id,
+                    equipment_id=diff.equipment_id,
+                    old_quantity=diff.old_quantity,
+                    new_quantity=diff.new_quantity,
+                    diff_type=diff.diff_type,
+                    equipment=schemas.EquipmentResponse(
+                        id=diff.equipment.id,
+                        name=diff.equipment.name,
+                        description=diff.equipment.description
+                    )
+                ) for diff in reassignment.equipment_diffs
+            ]
+        ),
+        original_booking=original_booking,
+        original_change=original_change,
+        original_occupancy=original_occupancy,
+        adopted_solution=adopted_solution,
+        processing_status="reassigned_pending_review" if reassignment.status == "pending" else "reassigned_with_conflict"
+    )
+
+
+@router.get("/my-reassignments", response_model=List[schemas.ReassignmentResponse])
+def get_my_reassignments(
+    status: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role(["admin", "employee_a"]))
+):
+    return crud.get_reassignments(
+        db,
+        operator_id=current_user.id,
+        status=status,
+        skip=skip,
+        limit=limit
+    )
+
+
+@router.get("/bookings/{booking_id}/reassignments", response_model=List[schemas.ReassignmentResponse])
+def get_booking_reassignments(
+    booking_id: int,
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role(["admin", "employee_a", "employee_b"]))
+):
+    booking = crud.get_booking(db, booking_id=booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail="预约不存在")
+    if booking.applicant_id != current_user.id and current_user.role not in ["admin", "employee_b"]:
+        raise HTTPException(status_code=403, detail="无权查看他人的预约改派记录")
+    return crud.get_reassignments(
+        db,
+        booking_id=booking_id,
+        skip=skip,
+        limit=limit
+    )

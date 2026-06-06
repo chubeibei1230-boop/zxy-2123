@@ -103,6 +103,7 @@ class Booking(Base):
     department = relationship("Department", back_populates="bookings")
     equipments = relationship("BookingEquipment", back_populates="booking", cascade="all, delete-orphan")
     changes = relationship("BookingChange", back_populates="booking", cascade="all, delete-orphan")
+    reassignments = relationship("BookingReassignment", back_populates="booking", foreign_keys="BookingReassignment.booking_id", cascade="all, delete-orphan")
 
 
 class BookingChange(Base):
@@ -139,6 +140,7 @@ class BookingChange(Base):
     old_department = relationship("Department", foreign_keys=[old_department_id])
     new_department = relationship("Department", foreign_keys=[new_department_id])
     equipment_changes = relationship("BookingEquipmentChange", back_populates="change", cascade="all, delete-orphan")
+    reassignments = relationship("BookingReassignment", back_populates="change", foreign_keys="BookingReassignment.change_id", cascade="all, delete-orphan")
 
 
 class BookingEquipmentChange(Base):
@@ -180,6 +182,7 @@ class TemporaryOccupancy(Base):
     created_at = Column(DateTime, nullable=False)
 
     room = relationship("MeetingRoom", back_populates="occupancies")
+    reassignments = relationship("BookingReassignment", back_populates="occupancy", foreign_keys="BookingReassignment.occupancy_id", cascade="all, delete-orphan")
 
 
 class ImportBatch(Base):
@@ -211,6 +214,58 @@ class ImportError(Base):
     row_data = Column(Text, nullable=True)
 
     batch = relationship("ImportBatch", back_populates="errors")
+
+
+class BookingReassignment(Base):
+    __tablename__ = "booking_reassignments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=True)
+    change_id = Column(Integer, ForeignKey("booking_changes.id"), nullable=True)
+    occupancy_id = Column(Integer, ForeignKey("temporary_occupancies.id"), nullable=True)
+    source_type = Column(String(30), nullable=False)
+    original_room_id = Column(Integer, ForeignKey("meeting_rooms.id"), nullable=False)
+    original_start_time = Column(DateTime, nullable=False)
+    original_end_time = Column(DateTime, nullable=False)
+    original_attendee_count = Column(Integer, nullable=True)
+    reassigned_room_id = Column(Integer, ForeignKey("meeting_rooms.id"), nullable=False)
+    reassigned_start_time = Column(DateTime, nullable=False)
+    reassigned_end_time = Column(DateTime, nullable=False)
+    reassigned_attendee_count = Column(Integer, nullable=True)
+    conflict_reasons = Column(Text, nullable=True)
+    recommendation_index = Column(Integer, nullable=True)
+    match_score = Column(Float, nullable=True)
+    recommendation_reasons = Column(Text, nullable=True)
+    operator_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    operated_at = Column(DateTime, nullable=False)
+    processing_note = Column(Text, nullable=True)
+    status = Column(String(20), default="pending")
+    reviewer_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    review_time = Column(DateTime, nullable=True)
+    review_comment = Column(Text, nullable=True)
+
+    booking = relationship("Booking", foreign_keys=[booking_id])
+    change = relationship("BookingChange", foreign_keys=[change_id])
+    occupancy = relationship("TemporaryOccupancy", foreign_keys=[occupancy_id])
+    original_room = relationship("MeetingRoom", foreign_keys=[original_room_id])
+    reassigned_room = relationship("MeetingRoom", foreign_keys=[reassigned_room_id])
+    operator = relationship("User", foreign_keys=[operator_id])
+    reviewer = relationship("User", foreign_keys=[reviewer_id])
+    equipment_diffs = relationship("ReassignmentEquipmentDiff", back_populates="reassignment", cascade="all, delete-orphan")
+
+
+class ReassignmentEquipmentDiff(Base):
+    __tablename__ = "reassignment_equipment_diffs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    reassignment_id = Column(Integer, ForeignKey("booking_reassignments.id"), nullable=False)
+    equipment_id = Column(Integer, ForeignKey("equipments.id"), nullable=False)
+    old_quantity = Column(Integer, nullable=True)
+    new_quantity = Column(Integer, nullable=True)
+    diff_type = Column(String(20), nullable=False)
+
+    reassignment = relationship("BookingReassignment", back_populates="equipment_diffs")
+    equipment = relationship("Equipment")
 
 
 class BookingRule(Base):

@@ -858,3 +858,270 @@ def get_occupancy_stats(
             "occupancy_rate": round(occupancy_rate, 2)
         })
     return stats
+
+
+def create_reassignment(
+    db: Session,
+    request: schemas.ReassignmentSelectRequest,
+    operator_id: int
+) -> models.BookingReassignment:
+    db_reassignment = models.BookingReassignment(
+        booking_id=request.booking_id,
+        change_id=request.change_id,
+        occupancy_id=request.occupancy_id,
+        source_type=request.source_type,
+        original_room_id=request.original_room_id,
+        original_start_time=request.original_start_time,
+        original_end_time=request.original_end_time,
+        original_attendee_count=request.original_attendee_count,
+        reassigned_room_id=request.recommendation_room_id,
+        reassigned_start_time=request.recommendation_start_time,
+        reassigned_end_time=request.recommendation_end_time,
+        reassigned_attendee_count=request.recommendation_attendee_count,
+        conflict_reasons="; ".join(request.conflict_reasons) if request.conflict_reasons else None,
+        recommendation_index=request.selected_recommendation_index,
+        match_score=request.match_score,
+        recommendation_reasons="; ".join(request.recommendation_reasons) if request.recommendation_reasons else None,
+        operator_id=operator_id,
+        operated_at=datetime.utcnow(),
+        processing_note=request.processing_note,
+        status="pending"
+    )
+
+    has_conflict, conflicts = check_time_conflict(
+        db,
+        request.recommendation_room_id,
+        request.recommendation_start_time,
+        request.recommendation_end_time,
+        exclude_booking_id=request.booking_id
+    )
+    if has_conflict:
+        db_reassignment.status = "conflict"
+        if db_reassignment.conflict_reasons:
+            db_reassignment.conflict_reasons += "; " + "; ".join(conflicts)
+        else:
+            db_reassignment.conflict_reasons = "; ".join(conflicts)
+
+    db.add(db_reassignment)
+    db.flush()
+
+    original_equip_map = {}
+    recommended_equip_map = {}
+    if request.original_equipments:
+        original_equip_map = {eq.equipment_id: eq.quantity for eq in request.original_equipments}
+    if request.recommended_equipments:
+        recommended_equip_map = {eq.equipment_id: eq.quantity for eq in request.recommended_equipments}
+
+    all_equip_ids = set(original_equip_map.keys()) | set(recommended_equip_map.keys())
+    for equip_id in all_equip_ids:
+        old_qty = original_equip_map.get(equip_id)
+        new_qty = recommended_equip_map.get(equip_id)
+        if old_qty != new_qty:
+            if old_qty is None:
+                diff_type = "add"
+            elif new_qty is None:
+                diff_type = "remove"
+            else:
+                diff_type = "modify"
+            db_eq_diff = models.ReassignmentEquipmentDiff(
+                reassignment_id=db_reassignment.id,
+                equipment_id=equip_id,
+                old_quantity=old_qty,
+                new_quantity=new_qty,
+                diff_type=diff_type
+            )
+            db.add(db_eq_diff)
+
+    db.commit()
+    db.refresh(db_reassignment)
+    return db_reassignment
+
+
+def get_reassignment(db: Session, reassignment_id: int) -> Optional[models.BookingReassignment]:
+    return db.query(models.BookingReassignment).filter(models.BookingReassignment.id == reassignment_id).first()
+
+
+def get_reassignments(
+    db: Session,
+    booking_id: Optional[int] = None,
+    change_id: Optional[int] = None,
+    status: Optional[str] = None,
+    operator_id: Optional[int] = None,
+    reviewer_id: Optional[int] = None,
+    skip: int = 0,
+    limit: int = 100
+) -> List[models.BookingReassignment]:
+    query = db.query(models.BookingReassignment)
+    if booking_id:
+        query = query.filter(models.BookingReassignment.booking_id == booking_id)
+    if change_id:
+        query = query.filter(models.BookingReassignment.change_id == change_id)
+    if status:
+        query = query.filter(models.BookingReassignment.status == status)
+    if operator_id:
+        query = query.filter(models.BookingReassignment.operator_id == operator_id)
+    if reviewer_id:
+        query = query.filter(models.BookingReassignment.reviewer_id == reviewer_id)
+    return query.order_by(models.BookingReassignment.operated_at.desc()).offset(skip).limit(limit).all()
+
+
+def can_be_reassigned(db: Session, booking: models.Booking) -> Tuple[bool, str]:
+    if booking.is_cancelled:
+        return False, "已取消的预约无法改派"
+    if booking.end_time < datetime.utcnow():
+        return False, "已结束的预约无法改派"
+    if booking.status == "rejected":
+        return False, "已拒绝的预约无法改派"
+    return True, ""
+
+
+def review_reassignment(
+    db: Session,
+    reassignment_id: int,
+    status: str,
+    reviewer_id: int,
+    review_comment: Optional[str] = None
+) -> Optional[models.BookingReassignment]:
+    db_reassignment = get_reassignment(db, reassignment_id)
+    if not db_reassignment:
+        return None
+    if db_reassignment.status not in ["pending", "conflict"]:
+        return None
+
+    if status == "approved":
+        has_conflict, conflicts = check_time_conflict(
+            db,
+            db_reassignment.reassigned_room_id,
+            db_reassignment.reassigned_start_time,
+            db_reassignment.reassigned_end_time,
+            exclude_booking_id=db_reassignment.booking_id
+        )
+        if has_conflict:
+            db_reassignment.status = "conflict"
+            db_reassignment.conflict_reasons = "; ".join(conflicts)
+            db_reassignment.reviewer_id = reviewer_id
+            db_reassignment.review_time = datetime.utcnow()
+            if review_comment:
+                db_reassignment.review_comment = review_comment
+            db.commit()
+            db.refresh(db_reassignment)
+            return db_reassignment
+
+    db_reassignment.status = status
+    db_reassignment.reviewer_id = reviewer_id
+    db_reassignment.review_time = datetime.utcnow()
+    if review_comment:
+        db_reassignment.review_comment = review_comment
+
+    if status == "approved":
+        if db_reassignment.booking_id:
+            booking = db_reassignment.booking
+            if booking:
+                booking.room_id = db_reassignment.reassigned_room_id
+                booking.start_time = db_reassignment.reassigned_start_time
+                booking.end_time = db_reassignment.reassigned_end_time
+                if db_reassignment.reassigned_attendee_count is not None:
+                    booking.attendee_count = db_reassignment.reassigned_attendee_count
+                booking.is_modified = True
+                booking.last_modified_at = datetime.utcnow()
+                booking.status = "approved"
+                booking.reviewer_id = reviewer_id
+                booking.review_time = datetime.utcnow()
+                if review_comment:
+                    booking.review_comment = review_comment
+
+                if db_reassignment.equipment_diffs:
+                    db.query(models.BookingEquipment).filter(
+                        models.BookingEquipment.booking_id == booking.id
+                    ).delete()
+                    new_equipments = {}
+                    old_equipments = {eq.equipment_id: eq.quantity for eq in booking.equipments}
+                    for eq_diff in db_reassignment.equipment_diffs:
+                        if eq_diff.diff_type == "add":
+                            new_equipments[eq_diff.equipment_id] = eq_diff.new_quantity
+                        elif eq_diff.diff_type == "remove":
+                            pass
+                        elif eq_diff.diff_type == "modify":
+                            new_equipments[eq_diff.equipment_id] = eq_diff.new_quantity
+                    for equip_id, qty in old_equipments.items():
+                        if equip_id not in new_equipments:
+                            has_remove = any(
+                                ed.equipment_id == equip_id and ed.diff_type == "remove"
+                                for ed in db_reassignment.equipment_diffs
+                            )
+                            if not has_remove:
+                                new_equipments[equip_id] = qty
+                    for equip_id, qty in new_equipments.items():
+                        if qty is not None:
+                            booking_eq = models.BookingEquipment(
+                                booking_id=booking.id,
+                                equipment_id=equip_id,
+                                quantity=qty
+                            )
+                            db.add(booking_eq)
+
+        elif db_reassignment.change_id:
+            change = db_reassignment.change
+            if change:
+                change.new_room_id = db_reassignment.reassigned_room_id
+                change.new_start_time = db_reassignment.reassigned_start_time
+                change.new_end_time = db_reassignment.reassigned_end_time
+                if db_reassignment.reassigned_attendee_count is not None:
+                    change.new_attendee_count = db_reassignment.reassigned_attendee_count
+                change.status = "approved"
+                change.reviewer_id = reviewer_id
+                change.review_time = datetime.utcnow()
+                if review_comment:
+                    change.review_comment = review_comment
+
+                booking = change.booking
+                if booking:
+                    booking.room_id = change.new_room_id
+                    booking.title = change.new_title
+                    booking.start_time = change.new_start_time
+                    booking.end_time = change.new_end_time
+                    booking.attendee_count = change.new_attendee_count
+                    booking.department_id = change.new_department_id
+                    booking.is_modified = True
+                    booking.last_modified_at = datetime.utcnow()
+
+                    if change.equipment_changes:
+                        db.query(models.BookingEquipment).filter(
+                            models.BookingEquipment.booking_id == booking.id
+                        ).delete()
+                        new_equipments = {}
+                        old_equipments = {eq.equipment_id: eq.quantity for eq in booking.equipments}
+                        for eq_change in change.equipment_changes:
+                            if eq_change.change_type == "add":
+                                new_equipments[eq_change.equipment_id] = eq_change.new_quantity
+                            elif eq_change.change_type == "remove":
+                                pass
+                            elif eq_change.change_type == "modify":
+                                new_equipments[eq_change.equipment_id] = eq_change.new_quantity
+                        for equip_id, qty in old_equipments.items():
+                            if equip_id not in new_equipments:
+                                has_remove = any(
+                                    ec.equipment_id == equip_id and ec.change_type == "remove"
+                                    for ec in change.equipment_changes
+                                )
+                                if not has_remove:
+                                    new_equipments[equip_id] = qty
+                        for equip_id, qty in new_equipments.items():
+                            if qty is not None:
+                                booking_eq = models.BookingEquipment(
+                                    booking_id=booking.id,
+                                    equipment_id=equip_id,
+                                    quantity=qty
+                                )
+                                db.add(booking_eq)
+
+        elif db_reassignment.occupancy_id:
+            occupancy = db_reassignment.occupancy
+            if occupancy:
+                occupancy.room_id = db_reassignment.reassigned_room_id
+                occupancy.start_time = db_reassignment.reassigned_start_time
+                occupancy.end_time = db_reassignment.reassigned_end_time
+
+    db.commit()
+    db.refresh(db_reassignment)
+    return db_reassignment

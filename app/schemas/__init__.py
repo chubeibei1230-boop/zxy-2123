@@ -458,3 +458,98 @@ class BookingRuleResponse(BookingRuleBase):
 
     class Config:
         from_attributes = True
+
+
+class ReassignmentEquipmentDiffBase(BaseModel):
+    equipment_id: int
+    old_quantity: Optional[int] = None
+    new_quantity: Optional[int] = None
+    diff_type: str
+
+
+class ReassignmentEquipmentDiffResponse(ReassignmentEquipmentDiffBase):
+    id: int
+    equipment: EquipmentResponse
+
+    class Config:
+        from_attributes = True
+
+
+class ReassignmentSelectRequest(BaseModel):
+    source_type: str
+    booking_id: Optional[int] = None
+    change_id: Optional[int] = None
+    occupancy_id: Optional[int] = None
+    original_room_id: int
+    original_start_time: datetime
+    original_end_time: datetime
+    original_attendee_count: Optional[int] = None
+    selected_recommendation_index: int
+    recommendation_room_id: int
+    recommendation_start_time: datetime
+    recommendation_end_time: datetime
+    recommendation_attendee_count: Optional[int] = None
+    match_score: Optional[float] = None
+    recommendation_reasons: Optional[List[str]] = []
+    conflict_reasons: Optional[List[str]] = []
+    processing_note: Optional[str] = None
+    original_equipments: Optional[List[BookingEquipmentCreate]] = []
+    recommended_equipments: Optional[List[BookingEquipmentCreate]] = []
+
+
+class ReassignmentResponse(BaseModel):
+    id: int
+    booking_id: Optional[int] = None
+    change_id: Optional[int] = None
+    occupancy_id: Optional[int] = None
+    source_type: str
+    original_room_id: int
+    original_room: Optional[MeetingRoomResponse] = None
+    original_start_time: datetime
+    original_end_time: datetime
+    original_attendee_count: Optional[int] = None
+    reassigned_room_id: int
+    reassigned_room: Optional[MeetingRoomResponse] = None
+    reassigned_start_time: datetime
+    reassigned_end_time: datetime
+    reassigned_attendee_count: Optional[int] = None
+    conflict_reasons: Optional[str] = None
+    recommendation_index: Optional[int] = None
+    match_score: Optional[float] = None
+    recommendation_reasons: Optional[str] = None
+    operator_id: int
+    operator: Optional[UserResponse] = None
+    operated_at: datetime
+    processing_note: Optional[str] = None
+    status: str
+    reviewer_id: Optional[int] = None
+    reviewer: Optional[UserResponse] = None
+    review_time: Optional[datetime] = None
+    review_comment: Optional[str] = None
+    equipment_diffs: List[ReassignmentEquipmentDiffResponse] = []
+
+    class Config:
+        from_attributes = True
+
+
+class ReassignmentWithDetailsResponse(BaseModel):
+    reassignment: ReassignmentResponse
+    original_booking: Optional[BookingResponse] = None
+    original_change: Optional[BookingChangeResponse] = None
+    original_occupancy: Optional[TemporaryOccupancyResponse] = None
+    adopted_solution: RecommendationItem
+    processing_status: str
+
+
+class ReassignmentListQuery(BaseModel):
+    booking_id: Optional[int] = None
+    change_id: Optional[int] = None
+    status: Optional[str] = None
+    operator_id: Optional[int] = None
+    reviewer_id: Optional[int] = None
+    skip: int = 0
+    limit: int = 100
+
+
+class ReassignmentReviewRequest(BaseModel):
+    review_comment: Optional[str] = None

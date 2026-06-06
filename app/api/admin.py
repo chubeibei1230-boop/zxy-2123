@@ -233,3 +233,183 @@ def delete_booking_rule(rule_id: int, db: Session = Depends(get_db)):
     if not success:
         raise HTTPException(status_code=404, detail="预约规则不存在")
     return {"message": "删除成功"}
+
+
+@router.post("/occupancies/reassign", response_model=schemas.ReassignmentWithDetailsResponse)
+def reassign_occupancy(
+    request: schemas.ReassignmentSelectRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role(["admin", "employee_b"]))
+):
+    if request.occupancy_id:
+        occupancy = crud.get_temporary_occupancy(db, occ_id=request.occupancy_id)
+        if not occupancy:
+            raise HTTPException(status_code=404, detail="临时占用不存在")
+    
+    reassignment = crud.create_reassignment(db, request, operator_id=current_user.id)
+    
+    original_booking = None
+    original_change = None
+    original_occupancy = None
+    
+    if reassignment.booking_id:
+        original_booking = reassignment.booking
+    if reassignment.change_id:
+        original_change = reassignment.change
+    if reassignment.occupancy_id:
+        original_occupancy = reassignment.occupancy
+    
+    adopted_solution = schemas.RecommendationItem(
+        room=schemas.MeetingRoomResponse(
+            id=reassignment.reassigned_room.id,
+            name=reassignment.reassigned_room.name,
+            capacity=reassignment.reassigned_room.capacity,
+            location=reassignment.reassigned_room.location,
+            description=reassignment.reassigned_room.description,
+            is_active=reassignment.reassigned_room.is_active,
+            equipments=[
+                schemas.RoomEquipmentResponse(
+                    id=re.id,
+                    equipment_id=re.equipment_id,
+                    quantity=re.quantity,
+                    equipment=schemas.EquipmentResponse(
+                        id=re.equipment.id,
+                        name=re.equipment.name,
+                        description=re.equipment.description
+                    )
+                ) for re in reassignment.reassigned_room.equipments
+            ]
+        ),
+        start_time=reassignment.reassigned_start_time,
+        end_time=reassignment.reassigned_end_time,
+        match_score=reassignment.match_score or 0,
+        reasons=reassignment.recommendation_reasons.split("; ") if reassignment.recommendation_reasons else [],
+        is_same_room=(reassignment.original_room_id == reassignment.reassigned_room_id),
+        is_same_time=(abs((reassignment.reassigned_start_time - reassignment.original_start_time).total_seconds()) < 60)
+    )
+    
+    return schemas.ReassignmentWithDetailsResponse(
+        reassignment=schemas.ReassignmentResponse(
+            id=reassignment.id,
+            booking_id=reassignment.booking_id,
+            change_id=reassignment.change_id,
+            occupancy_id=reassignment.occupancy_id,
+            source_type=reassignment.source_type,
+            original_room_id=reassignment.original_room_id,
+            original_room=schemas.MeetingRoomResponse(
+                id=reassignment.original_room.id,
+                name=reassignment.original_room.name,
+                capacity=reassignment.original_room.capacity,
+                location=reassignment.original_room.location,
+                description=reassignment.original_room.description,
+                is_active=reassignment.original_room.is_active,
+                equipments=[
+                    schemas.RoomEquipmentResponse(
+                        id=re.id,
+                        equipment_id=re.equipment_id,
+                        quantity=re.quantity,
+                        equipment=schemas.EquipmentResponse(
+                            id=re.equipment.id,
+                            name=re.equipment.name,
+                            description=re.equipment.description
+                        )
+                    ) for re in reassignment.original_room.equipments
+                ]
+            ) if reassignment.original_room else None,
+            original_start_time=reassignment.original_start_time,
+            original_end_time=reassignment.original_end_time,
+            original_attendee_count=reassignment.original_attendee_count,
+            reassigned_room_id=reassignment.reassigned_room_id,
+            reassigned_room=schemas.MeetingRoomResponse(
+                id=reassignment.reassigned_room.id,
+                name=reassignment.reassigned_room.name,
+                capacity=reassignment.reassigned_room.capacity,
+                location=reassignment.reassigned_room.location,
+                description=reassignment.reassigned_room.description,
+                is_active=reassignment.reassigned_room.is_active,
+                equipments=[
+                    schemas.RoomEquipmentResponse(
+                        id=re.id,
+                        equipment_id=re.equipment_id,
+                        quantity=re.quantity,
+                        equipment=schemas.EquipmentResponse(
+                            id=re.equipment.id,
+                            name=re.equipment.name,
+                            description=re.equipment.description
+                        )
+                    ) for re in reassignment.reassigned_room.equipments
+                ]
+            ) if reassignment.reassigned_room else None,
+            reassigned_start_time=reassignment.reassigned_start_time,
+            reassigned_end_time=reassignment.reassigned_end_time,
+            reassigned_attendee_count=reassignment.reassigned_attendee_count,
+            conflict_reasons=reassignment.conflict_reasons,
+            recommendation_index=reassignment.recommendation_index,
+            match_score=reassignment.match_score,
+            recommendation_reasons=reassignment.recommendation_reasons,
+            operator_id=reassignment.operator_id,
+            operator=schemas.UserResponse(
+                id=reassignment.operator.id,
+                username=reassignment.operator.username,
+                full_name=reassignment.operator.full_name,
+                role=reassignment.operator.role,
+                department_id=reassignment.operator.department_id,
+                is_active=reassignment.operator.is_active
+            ) if reassignment.operator else None,
+            operated_at=reassignment.operated_at,
+            processing_note=reassignment.processing_note,
+            status=reassignment.status,
+            reviewer_id=reassignment.reviewer_id,
+            reviewer=schemas.UserResponse(
+                id=reassignment.reviewer.id,
+                username=reassignment.reviewer.username,
+                full_name=reassignment.reviewer.full_name,
+                role=reassignment.reviewer.role,
+                department_id=reassignment.reviewer.department_id,
+                is_active=reassignment.reviewer.is_active
+            ) if reassignment.reviewer else None,
+            review_time=reassignment.review_time,
+            review_comment=reassignment.review_comment,
+            equipment_diffs=[
+                schemas.ReassignmentEquipmentDiffResponse(
+                    id=diff.id,
+                    equipment_id=diff.equipment_id,
+                    old_quantity=diff.old_quantity,
+                    new_quantity=diff.new_quantity,
+                    diff_type=diff.diff_type,
+                    equipment=schemas.EquipmentResponse(
+                        id=diff.equipment.id,
+                        name=diff.equipment.name,
+                        description=diff.equipment.description
+                    )
+                ) for diff in reassignment.equipment_diffs
+            ]
+        ),
+        original_booking=original_booking,
+        original_change=original_change,
+        original_occupancy=original_occupancy,
+        adopted_solution=adopted_solution,
+        processing_status="reassigned_pending_review" if reassignment.status == "pending" else "reassigned_with_conflict"
+    )
+
+
+@router.get("/reassignments", response_model=List[schemas.ReassignmentResponse])
+def list_reassignments(
+    booking_id: Optional[int] = None,
+    change_id: Optional[int] = None,
+    status: Optional[str] = None,
+    operator_id: Optional[int] = None,
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role(["admin", "employee_b"]))
+):
+    return crud.get_reassignments(
+        db,
+        booking_id=booking_id,
+        change_id=change_id,
+        status=status,
+        operator_id=operator_id,
+        skip=skip,
+        limit=limit
+    )
