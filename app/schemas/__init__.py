@@ -309,9 +309,94 @@ class ImportBatchResponse(ImportBatchBase):
         from_attributes = True
 
 
+class RoomTimeSlot(BaseModel):
+    room_id: int
+    room_name: str
+    start_time: datetime
+    end_time: datetime
+    capacity: int
+    location: Optional[str] = None
+
+
+class RecommendationItem(BaseModel):
+    room: MeetingRoomResponse
+    start_time: datetime
+    end_time: datetime
+    match_score: float
+    reasons: List[str]
+    is_same_room: bool = False
+    is_same_time: bool = False
+
+
+class RecommendationResponse(BaseModel):
+    original_request: dict
+    conflict_reasons: List[str]
+    recommendations: List[RecommendationItem]
+    total_available: int
+
+
+class ConflictBookingRecord(BaseModel):
+    id: int
+    type: str
+    title: str
+    original_room: str
+    original_start_time: datetime
+    original_end_time: datetime
+    attendee_count: int
+    department: str
+    applicant: str
+    status: str
+    conflict_info: Optional[str] = None
+    recommended_solution: Optional[str] = None
+    resolution_status: str
+    resolved_at: Optional[datetime] = None
+    created_at: datetime
+
+
+class ConflictBookingStatsResponse(BaseModel):
+    start_date: datetime
+    end_date: datetime
+    total_conflicts: int
+    resolved_count: int
+    pending_count: int
+    resolved_by_alternative: int
+    resolved_by_rejection: int
+    records: List[ConflictBookingRecord]
+
+
+class ImportRowResult(BaseModel):
+    row_number: int
+    success: bool
+    booking: Optional[BookingResponse] = None
+    errors: List[str] = []
+    recommendations: Optional[RecommendationResponse] = None
+
+
 class ImportResultResponse(BaseModel):
     batch: ImportBatchResponse
     successful_bookings: List[BookingResponse] = []
+    failed_rows: List[ImportRowResult] = []
+
+
+class BookingWithRecommendationResponse(BaseModel):
+    booking: Optional[BookingResponse] = None
+    success: bool
+    errors: List[str] = []
+    recommendations: Optional[RecommendationResponse] = None
+
+
+class BookingChangeWithRecommendationResponse(BaseModel):
+    change: Optional[BookingChangeResponse] = None
+    success: bool
+    errors: List[str] = []
+    recommendations: Optional[RecommendationResponse] = None
+
+
+class OccupancyWithRecommendationResponse(BaseModel):
+    occupancy: Optional[TemporaryOccupancyResponse] = None
+    success: bool
+    errors: List[str] = []
+    recommendations: Optional[RecommendationResponse] = None
 
 
 class BookingQueryParams(BaseModel):

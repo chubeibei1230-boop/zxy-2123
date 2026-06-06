@@ -4,6 +4,7 @@ from typing import List, Optional
 from app import schemas, crud, models
 from app.core.database import get_db
 from app.core.security import require_role
+from app.core.recommendation import generate_recommendations
 
 router = APIRouter(prefix="/admin", tags=["管理员"], dependencies=[Depends(require_role(["admin"]))])
 
@@ -116,21 +117,49 @@ def update_meeting_room(room_id: int, room_update: schemas.MeetingRoomUpdate, db
     return room
 
 
-@router.post("/occupancies", response_model=schemas.TemporaryOccupancyResponse)
+@router.post("/occupancies", response_model=schemas.OccupancyWithRecommendationResponse)
 def create_temporary_occupancy(
     occ: schemas.TemporaryOccupancyCreate,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(require_role(["admin", "employee_b"]))
 ):
+    errors = []
     room = crud.get_meeting_room(db, room_id=occ.room_id)
     if not room:
-        raise HTTPException(status_code=400, detail="会议室不存在")
+        errors.append("会议室不存在")
     if occ.start_time >= occ.end_time:
-        raise HTTPException(status_code=400, detail="结束时间必须晚于开始时间")
+        errors.append("结束时间必须晚于开始时间")
+    
+    if errors:
+        return schemas.OccupancyWithRecommendationResponse(
+            success=False,
+            errors=errors
+        )
+    
     has_conflict, conflicts = crud.check_time_conflict(db, occ.room_id, occ.start_time, occ.end_time)
+    
     if has_conflict:
-        raise HTTPException(status_code=400, detail="时间冲突: " + "; ".join(conflicts))
-    return crud.create_temporary_occupancy(db=db, occ=occ, created_by_id=current_user.id)
+        recommendations = generate_recommendations(
+            db=db,
+            original_room_id=occ.room_id,
+            original_start=occ.start_time,
+            original_end=occ.end_time,
+            attendee_count=1,
+            department_id=None,
+            required_equipments=[],
+            max_recommendations=5
+        )
+        return schemas.OccupancyWithRecommendationResponse(
+            success=False,
+            errors=["时间冲突: " + "; ".join(conflicts)],
+            recommendations=recommendations
+        )
+    
+    occupancy = crud.create_temporary_occupancy(db=db, occ=occ, created_by_id=current_user.id)
+    return schemas.OccupancyWithRecommendationResponse(
+        success=True,
+        occupancy=occupancy
+    )
 
 
 @router.delete("/occupancies/{occ_id}")
