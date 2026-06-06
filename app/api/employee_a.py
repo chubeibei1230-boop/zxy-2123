@@ -76,9 +76,13 @@ def validate_booking_row(db: Session, row: dict, row_num: int) -> tuple[Optional
             equip = crud.get_equipment_by_name(db, name=eq_name)
             if not equip:
                 errors.append(f"设备不存在: {eq_name}")
+            elif not room:
+                errors.append(f"会议室不存在，无法检查设备 {eq_name}")
             else:
-                room_eq = next((re for re in room.equipments if re.equipment_id == equip.id), None) if room else None
-                if room and room_eq and qty > room_eq.quantity:
+                room_eq = next((re for re in room.equipments if re.equipment_id == equip.id), None)
+                if not room_eq:
+                    errors.append(f"会议室 {room.name} 未配备设备: {eq_name}")
+                elif qty > room_eq.quantity:
                     errors.append(f"设备 {eq_name} 数量不足，会议室最多提供 {room_eq.quantity} 个")
                 else:
                     equipment_list.append(schemas.BookingEquipmentCreate(

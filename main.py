@@ -93,6 +93,23 @@ def init_db():
             ]
             db.add_all(users)
 
+        if db.query(models.BookingRule).count() == 0:
+            default_rule = models.BookingRule(
+                rule_name="默认预约规则",
+                max_booking_days=30,
+                min_booking_hours=0,
+                max_booking_hours=8,
+                require_approval=True,
+                allow_weekend=False,
+                start_time_limit="08:00",
+                end_time_limit="20:00",
+                max_attendees_per_room=None,
+                description="系统默认预约规则",
+                is_active=True,
+                created_at=datetime.utcnow()
+            )
+            db.add(default_rule)
+
         db.commit()
     except Exception as e:
         db.rollback()

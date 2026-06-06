@@ -262,3 +262,43 @@ class OccupancyStatsResponse(BaseModel):
     approved_count: int
     rejected_count: int
     occupancy_rate: float
+
+
+class BookingRuleBase(BaseModel):
+    rule_name: str
+    max_booking_days: int = 30
+    min_booking_hours: int = 0
+    max_booking_hours: int = 8
+    require_approval: bool = True
+    allow_weekend: bool = False
+    start_time_limit: str = "08:00"
+    end_time_limit: str = "20:00"
+    max_attendees_per_room: Optional[int] = None
+    description: Optional[str] = None
+    is_active: bool = True
+
+
+class BookingRuleCreate(BookingRuleBase):
+    pass
+
+
+class BookingRuleUpdate(BaseModel):
+    rule_name: Optional[str] = None
+    max_booking_days: Optional[int] = None
+    min_booking_hours: Optional[int] = None
+    max_booking_hours: Optional[int] = None
+    require_approval: Optional[bool] = None
+    allow_weekend: Optional[bool] = None
+    start_time_limit: Optional[str] = None
+    end_time_limit: Optional[str] = None
+    max_attendees_per_room: Optional[int] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class BookingRuleResponse(BookingRuleBase):
+    id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

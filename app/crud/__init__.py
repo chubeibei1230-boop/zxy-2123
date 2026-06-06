@@ -225,6 +225,8 @@ def get_bookings(
     if start_date:
         query = query.filter(models.Booking.start_time >= start_date)
     if end_date:
+        if end_date.hour == 0 and end_date.minute == 0 and end_date.second == 0:
+            end_date = end_date.replace(hour=23, minute=59, second=59)
         query = query.filter(models.Booking.end_time <= end_date)
     return query.order_by(models.Booking.start_time.desc()).offset(skip).limit(limit).all()
 
@@ -294,6 +296,8 @@ def get_temporary_occupancies(
     if start_date:
         query = query.filter(models.TemporaryOccupancy.start_time >= start_date)
     if end_date:
+        if end_date.hour == 0 and end_date.minute == 0 and end_date.second == 0:
+            end_date = end_date.replace(hour=23, minute=59, second=59)
         query = query.filter(models.TemporaryOccupancy.end_time <= end_date)
     return query.order_by(models.TemporaryOccupancy.start_time.desc()).offset(skip).limit(limit).all()
 
@@ -435,3 +439,55 @@ def get_occupancy_stats(
             "occupancy_rate": round(occupancy_rate, 2)
         })
     return stats
+
+
+def get_booking_rule(db: Session, rule_id: int) -> Optional[models.BookingRule]:
+    return db.query(models.BookingRule).filter(models.BookingRule.id == rule_id).first()
+
+
+def get_booking_rule_by_name(db: Session, rule_name: str) -> Optional[models.BookingRule]:
+    return db.query(models.BookingRule).filter(models.BookingRule.rule_name == rule_name).first()
+
+
+def get_active_booking_rule(db: Session) -> Optional[models.BookingRule]:
+    return db.query(models.BookingRule).filter(models.BookingRule.is_active == True).first()
+
+
+def get_booking_rules(db: Session, skip: int = 0, limit: int = 100) -> List[models.BookingRule]:
+    return db.query(models.BookingRule).order_by(models.BookingRule.created_at.desc()).offset(skip).limit(limit).all()
+
+
+def create_booking_rule(db: Session, rule: schemas.BookingRuleCreate) -> models.BookingRule:
+    db_rule = models.BookingRule(
+        **rule.model_dump(),
+        created_at=datetime.utcnow()
+    )
+    if rule.is_active:
+        db.query(models.BookingRule).update({models.BookingRule.is_active: False})
+    db.add(db_rule)
+    db.commit()
+    db.refresh(db_rule)
+    return db_rule
+
+
+def update_booking_rule(db: Session, rule_id: int, rule_update: schemas.BookingRuleUpdate) -> Optional[models.BookingRule]:
+    db_rule = get_booking_rule(db, rule_id)
+    if not db_rule:
+        return None
+    update_data = rule_update.model_dump(exclude_unset=True)
+    if update_data.get("is_active"):
+        db.query(models.BookingRule).filter(models.BookingRule.id != rule_id).update({models.BookingRule.is_active: False})
+    for key, value in update_data.items():
+        setattr(db_rule, key, value)
+    db.commit()
+    db.refresh(db_rule)
+    return db_rule
+
+
+def delete_booking_rule(db: Session, rule_id: int) -> bool:
+    db_rule = get_booking_rule(db, rule_id)
+    if not db_rule:
+        return False
+    db.delete(db_rule)
+    db.commit()
+    return True

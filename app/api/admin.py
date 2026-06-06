@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from app import schemas, crud, models
 from app.core.database import get_db
 from app.core.security import require_role
@@ -127,6 +127,9 @@ def create_temporary_occupancy(
         raise HTTPException(status_code=400, detail="会议室不存在")
     if occ.start_time >= occ.end_time:
         raise HTTPException(status_code=400, detail="结束时间必须晚于开始时间")
+    has_conflict, conflicts = crud.check_time_conflict(db, occ.room_id, occ.start_time, occ.end_time)
+    if has_conflict:
+        raise HTTPException(status_code=400, detail="时间冲突: " + "; ".join(conflicts))
     return crud.create_temporary_occupancy(db=db, occ=occ, created_by_id=current_user.id)
 
 
@@ -135,4 +138,50 @@ def delete_temporary_occupancy(occ_id: int, db: Session = Depends(get_db)):
     success = crud.delete_temporary_occupancy(db, occ_id=occ_id)
     if not success:
         raise HTTPException(status_code=404, detail="临时占用不存在")
+    return {"message": "删除成功"}
+
+
+@router.get("/booking-rules", response_model=List[schemas.BookingRuleResponse])
+def list_booking_rules(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    return crud.get_booking_rules(db, skip=skip, limit=limit)
+
+
+@router.get("/booking-rules/active", response_model=Optional[schemas.BookingRuleResponse])
+def get_active_booking_rule(db: Session = Depends(get_db)):
+    return crud.get_active_booking_rule(db)
+
+
+@router.post("/booking-rules", response_model=schemas.BookingRuleResponse)
+def create_booking_rule(rule: schemas.BookingRuleCreate, db: Session = Depends(get_db)):
+    existing = crud.get_booking_rule_by_name(db, rule_name=rule.rule_name)
+    if existing:
+        raise HTTPException(status_code=400, detail="规则名称已存在")
+    return crud.create_booking_rule(db=db, rule=rule)
+
+
+@router.get("/booking-rules/{rule_id}", response_model=schemas.BookingRuleResponse)
+def get_booking_rule(rule_id: int, db: Session = Depends(get_db)):
+    rule = crud.get_booking_rule(db, rule_id=rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="预约规则不存在")
+    return rule
+
+
+@router.put("/booking-rules/{rule_id}", response_model=schemas.BookingRuleResponse)
+def update_booking_rule(rule_id: int, rule_update: schemas.BookingRuleUpdate, db: Session = Depends(get_db)):
+    if rule_update.rule_name:
+        existing = crud.get_booking_rule_by_name(db, rule_name=rule_update.rule_name)
+        if existing and existing.id != rule_id:
+            raise HTTPException(status_code=400, detail="规则名称已存在")
+    rule = crud.update_booking_rule(db, rule_id=rule_id, rule_update=rule_update)
+    if not rule:
+        raise HTTPException(status_code=404, detail="预约规则不存在")
+    return rule
+
+
+@router.delete("/booking-rules/{rule_id}")
+def delete_booking_rule(rule_id: int, db: Session = Depends(get_db)):
+    success = crud.delete_booking_rule(db, rule_id=rule_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="预约规则不存在")
     return {"message": "删除成功"}

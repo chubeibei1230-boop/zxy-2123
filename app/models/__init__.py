@@ -153,3 +153,21 @@ class ImportError(Base):
     row_data = Column(Text, nullable=True)
 
     batch = relationship("ImportBatch", back_populates="errors")
+
+
+class BookingRule(Base):
+    __tablename__ = "booking_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    rule_name = Column(String(100), unique=True, nullable=False)
+    max_booking_days = Column(Integer, default=30)
+    min_booking_hours = Column(Integer, default=0)
+    max_booking_hours = Column(Integer, default=8)
+    require_approval = Column(Boolean, default=True)
+    allow_weekend = Column(Boolean, default=False)
+    start_time_limit = Column(String(10), default="08:00")
+    end_time_limit = Column(String(10), default="20:00")
+    max_attendees_per_room = Column(Integer, nullable=True)
+    description = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, nullable=False)
