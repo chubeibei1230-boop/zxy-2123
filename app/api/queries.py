@@ -211,7 +211,7 @@ def get_conflict_bookings_stats(
             resolution_status = "pending"
         elif booking.status == "approved":
             if booking.conflict_info:
-                resolution_status = "resolved_alternative"
+                resolution_status = "resolved_with_conflict"
             else:
                 resolution_status = "resolved_normal"
             resolved_at = booking.review_time
@@ -235,7 +235,8 @@ def get_conflict_bookings_stats(
                         ) for eq in booking.equipments
                     ],
                     exclude_booking_id=booking.id,
-                    max_recommendations=3
+                    max_recommendations=3,
+                    title_keywords=booking.title
                 )
                 if recs.recommendations:
                     top = recs.recommendations[0]
@@ -289,7 +290,7 @@ def get_conflict_bookings_stats(
             resolution_status = "pending"
         elif change.status == "approved":
             if change.conflict_info:
-                resolution_status = "resolved_alternative"
+                resolution_status = "resolved_with_conflict"
             else:
                 resolution_status = "resolved_normal"
             resolved_at = change.review_time
@@ -314,7 +315,8 @@ def get_conflict_bookings_stats(
                     department_id=change.new_department_id if change.new_department_id else change.old_department_id,
                     required_equipments=[],
                     exclude_booking_id=change.booking_id,
-                    max_recommendations=3
+                    max_recommendations=3,
+                    title_keywords=change.new_title if change.new_title else change.old_title
                 )
                 if recs.recommendations:
                     top = recs.recommendations[0]
@@ -346,7 +348,7 @@ def get_conflict_bookings_stats(
     total_conflicts = len(records)
     resolved_count = sum(1 for r in records if r.resolution_status.startswith("resolved"))
     pending_count = total_conflicts - resolved_count
-    resolved_by_alternative = sum(1 for r in records if r.resolution_status == "resolved_alternative")
+    resolved_with_conflict = sum(1 for r in records if r.resolution_status == "resolved_with_conflict")
     resolved_by_rejection = sum(1 for r in records if r.resolution_status == "resolved_rejected")
     
     return schemas.ConflictBookingStatsResponse(
@@ -355,7 +357,7 @@ def get_conflict_bookings_stats(
         total_conflicts=total_conflicts,
         resolved_count=resolved_count,
         pending_count=pending_count,
-        resolved_by_alternative=resolved_by_alternative,
+        resolved_with_conflict=resolved_with_conflict,
         resolved_by_rejection=resolved_by_rejection,
         records=records
     )

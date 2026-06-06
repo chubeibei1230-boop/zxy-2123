@@ -52,7 +52,6 @@ def get_available_time_slots(
     def is_within_rules(start: datetime, end: datetime) -> Tuple[bool, List[str]]:
         reasons = []
         if booking_rule:
-            from datetime import time
             start_time_only = start.time()
             end_time_only = end.time()
             rule_start = datetime.strptime(booking_rule.start_time_limit, "%H:%M").time()
@@ -88,9 +87,9 @@ def get_available_time_slots(
                 if time_diff < 1:
                     time_reason = "时间完全匹配"
                 elif time_diff <= 30:
-                    time_reason = f"仅提前{int(time_diff)}分钟"
+                    time_reason = f"仅调整{int(time_diff)}分钟"
                 elif time_diff <= 60:
-                    time_reason = f"提前{int(time_diff)}分钟"
+                    time_reason = f"调整{int(time_diff)}分钟"
                 else:
                     hours = int(time_diff // 60)
                     minutes = int(time_diff % 60)
@@ -104,10 +103,8 @@ def get_available_time_slots(
     step = 30
     for i in range(1, max_slots_per_direction + 1):
         offset = timedelta(minutes=step * i)
-        if check_and_add_slot(desired_start + offset, desired_end + offset, [f"向后偏移{step * i}分钟"]):
-            pass
-        if check_and_add_slot(desired_start - offset, desired_end - offset, [f"向前偏移{step * i}分钟"]):
-            pass
+        check_and_add_slot(desired_start + offset, desired_end + offset, [f"向后偏移{step * i}分钟"])
+        check_and_add_slot(desired_start - offset, desired_end - offset, [f"向前偏移{step * i}分钟"])
     
     if not slots:
         for day_offset in range(1, 4):
@@ -131,24 +128,28 @@ def calculate_match_score(
     original_end: datetime,
     attendee_count: int,
     required_equipments: List[schemas.BookingEquipmentCreate],
-    department_id: Optional[int] = None
+    department_id: Optional[int] = None,
+    title_keywords: Optional[str] = None,
+    room_department_preference: Optional[int] = None
 ) -> Tuple[float, List[str]]:
     score = 100.0
     reasons = []
     
     if room.id == original_room_id:
-        reasons.append("原会议室")
+        score += 15
+        reasons.append("原会议室优先")
     else:
         score -= 10
     
     time_diff = abs((start_time - original_start).total_seconds() / 60)
     if time_diff < 1:
+        score += 10
         reasons.append("时间完全匹配")
     elif time_diff <= 30:
-        score -= 5
+        score += 5
         reasons.append(f"时间相近(差{int(time_diff)}分钟)")
     elif time_diff <= 60:
-        score -= 10
+        score -= 5
         reasons.append(f"时间调整{int(time_diff)}分钟")
     else:
         hours = int(time_diff // 60)
@@ -157,15 +158,16 @@ def calculate_match_score(
     
     capacity_diff = room.capacity - attendee_count
     if capacity_diff == 0:
+        score += 5
         reasons.append("容量刚好合适")
     elif capacity_diff <= 5:
-        score -= 2
+        score += 3
         reasons.append(f"容量略有余量(多{capacity_diff}个座位)")
     elif capacity_diff <= 15:
-        score -= 5
+        score += 1
         reasons.append(f"容量充足(多{capacity_diff}个座位)")
     else:
-        score -= 10
+        score -= 5
         reasons.append(f"容量较大(多{capacity_diff}个座位)")
     
     if required_equipments:
@@ -175,10 +177,27 @@ def calculate_match_score(
             if req.equipment_id in room_equip_map:
                 matched_count += 1
         if matched_count == len(required_equipments):
+            score += 10
             reasons.append("设备完全匹配")
         else:
-            score -= (len(required_equipments) - matched_count) * 5
+            score -= (len(required_equipments) - matched_count) * 10
             reasons.append(f"匹配{matched_count}/{len(required_equipments)}项设备")
+    
+    if department_id and room_department_preference and department_id == room_department_preference:
+        score += 8
+        reasons.append("部门优先会议室")
+    
+    if title_keywords:
+        title_lower = title_keywords.lower()
+        room_name_lower = room.name.lower()
+        if title_lower in room_name_lower or room_name_lower in title_lower:
+            score += 5
+            reasons.append("会议主题与会议室匹配")
+        if room.location:
+            location_lower = room.location.lower()
+            if title_lower in location_lower:
+                score += 3
+                reasons.append("会议主题与位置匹配")
     
     return max(0, score), reasons
 
@@ -193,7 +212,9 @@ def generate_recommendations(
     required_equipments: Optional[List[schemas.BookingEquipmentCreate]] = None,
     exclude_booking_id: Optional[int] = None,
     max_recommendations: int = 5,
-    title_keywords: Optional[str] = None
+    title_keywords: Optional[str] = None,
+    check_capacity: bool = True,
+    check_equipment: bool = True
 ) -> schemas.RecommendationResponse:
     if required_equipments is None:
         required_equipments = []
@@ -204,10 +225,10 @@ def generate_recommendations(
     original_room = crud.get_meeting_room(db, original_room_id)
     
     if original_room:
-        if attendee_count > original_room.capacity:
+        if check_capacity and attendee_count > original_room.capacity:
             conflict_reasons.append(f"原会议室容量不足(需要{attendee_count}人，仅容纳{original_room.capacity}人)")
         
-        if required_equipments:
+        if check_equipment and required_equipments:
             equip_ok, equip_issues = check_room_equipment_match(db, original_room, required_equipments)
             if not equip_ok:
                 conflict_reasons.extend(equip_issues)
@@ -222,12 +243,13 @@ def generate_recommendations(
     candidates = []
     
     for room in all_rooms:
-        if room.capacity < attendee_count:
+        if check_capacity and room.capacity < attendee_count:
             continue
         
-        equip_ok, _ = check_room_equipment_match(db, room, required_equipments)
-        if not equip_ok and room.id != original_room_id:
-            continue
+        if check_equipment and required_equipments:
+            equip_ok, _ = check_room_equipment_match(db, room, required_equipments)
+            if not equip_ok and room.id != original_room_id:
+                continue
         
         time_slots = get_available_time_slots(
             db, room, original_start, original_end, duration_minutes,
@@ -237,7 +259,9 @@ def generate_recommendations(
         for start, end, time_reasons in time_slots:
             score, score_reasons = calculate_match_score(
                 room, start, end, original_room_id, original_start, original_end,
-                attendee_count, required_equipments, department_id
+                attendee_count, required_equipments, department_id,
+                title_keywords=title_keywords,
+                room_department_preference=department_id
             )
             
             all_reasons = list(set(score_reasons + time_reasons))
@@ -282,7 +306,8 @@ def generate_recommendations(
         "end_time": original_end.isoformat(),
         "attendee_count": attendee_count,
         "department_id": department_id,
-        "equipment_count": len(required_equipments)
+        "equipment_count": len(required_equipments),
+        "title_keywords": title_keywords
     }
     
     return schemas.RecommendationResponse(

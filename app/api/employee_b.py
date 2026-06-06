@@ -165,7 +165,8 @@ def get_booking_detail(booking_id: int, db: Session = Depends(get_db)):
                 ) for eq in booking.equipments
             ],
             exclude_booking_id=booking.id,
-            max_recommendations=5
+            max_recommendations=5,
+            title_keywords=booking.title
         )
         result.recommendations = recommendations
     
@@ -402,7 +403,8 @@ def get_change_detail(
             department_id=department_id,
             required_equipments=equipment_reqs,
             exclude_booking_id=change.booking_id,
-            max_recommendations=5
+            max_recommendations=5,
+            title_keywords=change.new_title if change.new_title else change.old_title
         )
         result.recommendations = recommendations
     

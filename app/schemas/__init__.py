@@ -359,7 +359,7 @@ class ConflictBookingStatsResponse(BaseModel):
     total_conflicts: int
     resolved_count: int
     pending_count: int
-    resolved_by_alternative: int
+    resolved_with_conflict: int
     resolved_by_rejection: int
     records: List[ConflictBookingRecord]
 

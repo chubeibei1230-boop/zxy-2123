@@ -4,7 +4,7 @@ from typing import List, Optional
 from app import schemas, crud, models
 from app.core.database import get_db
 from app.core.security import require_role
-from app.core.recommendation import generate_recommendations
+from app.core.recommendation import generate_recommendations, check_room_equipment_match
 
 router = APIRouter(prefix="/admin", tags=["管理员"], dependencies=[Depends(require_role(["admin"]))])
 
@@ -130,29 +130,48 @@ def create_temporary_occupancy(
     if occ.start_time >= occ.end_time:
         errors.append("结束时间必须晚于开始时间")
     
+    attendee_count = getattr(occ, 'attendee_count', 0) or 0
+    required_equipments = getattr(occ, 'equipments', []) or []
+    
+    if room:
+        if attendee_count > 0 and attendee_count > room.capacity:
+            errors.append(f"会议室容量不足(需要{attendee_count}人，仅容纳{room.capacity}人)")
+        
+        if required_equipments:
+            equip_ok, equip_issues = check_room_equipment_match(db, room, required_equipments)
+            if not equip_ok:
+                errors.extend(equip_issues)
+    
+    has_conflict = False
+    conflicts = []
+    if room:
+        has_conflict, conflicts = crud.check_time_conflict(db, occ.room_id, occ.start_time, occ.end_time)
+        if has_conflict:
+            errors.append("时间冲突: " + "; ".join(conflicts))
+    
     if errors:
+        if room:
+            recommendations = generate_recommendations(
+                db=db,
+                original_room_id=occ.room_id,
+                original_start=occ.start_time,
+                original_end=occ.end_time,
+                attendee_count=attendee_count if attendee_count > 0 else 1,
+                department_id=None,
+                required_equipments=required_equipments,
+                max_recommendations=5,
+                title_keywords=getattr(occ, 'reason', None),
+                check_capacity=(attendee_count > 0),
+                check_equipment=(len(required_equipments) > 0)
+            )
+            return schemas.OccupancyWithRecommendationResponse(
+                success=False,
+                errors=errors,
+                recommendations=recommendations
+            )
         return schemas.OccupancyWithRecommendationResponse(
             success=False,
             errors=errors
-        )
-    
-    has_conflict, conflicts = crud.check_time_conflict(db, occ.room_id, occ.start_time, occ.end_time)
-    
-    if has_conflict:
-        recommendations = generate_recommendations(
-            db=db,
-            original_room_id=occ.room_id,
-            original_start=occ.start_time,
-            original_end=occ.end_time,
-            attendee_count=1,
-            department_id=None,
-            required_equipments=[],
-            max_recommendations=5
-        )
-        return schemas.OccupancyWithRecommendationResponse(
-            success=False,
-            errors=["时间冲突: " + "; ".join(conflicts)],
-            recommendations=recommendations
         )
     
     occupancy = crud.create_temporary_occupancy(db=db, occ=occ, created_by_id=current_user.id)

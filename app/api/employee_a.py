@@ -223,7 +223,6 @@ async def import_bookings(
                 batch_id=batch.id
             )
             success_count += 1
-            successful_bookings.append(booking)
             
             if booking.status == "conflict":
                 recommendations = generate_recommendations(
@@ -240,12 +239,16 @@ async def import_bookings(
                         ) for eq in booking.equipments
                     ],
                     exclude_booking_id=booking.id,
-                    max_recommendations=5
+                    max_recommendations=5,
+                    title_keywords=booking.title
                 )
                 row_result.success = True
                 row_result.booking = booking
                 row_result.recommendations = recommendations
                 failed_rows.append(row_result)
+                successful_bookings.append(booking)
+            else:
+                successful_bookings.append(booking)
         except Exception as e:
             error_count += 1
             crud.add_import_error(
@@ -265,7 +268,8 @@ async def import_bookings(
                     attendee_count=context["attendee_count"],
                     department_id=context["dept"].id if context["dept"] else None,
                     required_equipments=context["equipments"],
-                    max_recommendations=5
+                    max_recommendations=5,
+                    title_keywords=row.get("会议标题", "")
                 )
                 row_result.recommendations = recommendations
             failed_rows.append(row_result)
@@ -393,7 +397,8 @@ def modify_booking(
             department_id=new_dept,
             required_equipments=new_equipments,
             exclude_booking_id=booking.id,
-            max_recommendations=5
+            max_recommendations=5,
+            title_keywords=modify_data.title if modify_data.title else booking.title
         )
         
         return schemas.BookingChangeWithRecommendationResponse(
@@ -424,7 +429,8 @@ def modify_booking(
             department_id=new_dept,
             required_equipments=new_equipments,
             exclude_booking_id=booking.id,
-            max_recommendations=5
+            max_recommendations=5,
+            title_keywords=modify_data.title if modify_data.title else booking.title
         )
         
         return schemas.BookingChangeWithRecommendationResponse(
