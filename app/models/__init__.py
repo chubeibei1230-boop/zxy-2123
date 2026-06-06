@@ -88,13 +88,71 @@ class Booking(Base):
     review_time = Column(DateTime, nullable=True)
     review_comment = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False)
+    is_cancelled = Column(Boolean, default=False)
+    cancelled_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    cancel_reason = Column(Text, nullable=True)
+    is_modified = Column(Boolean, default=False)
+    last_modified_at = Column(DateTime, nullable=True)
 
     batch = relationship("ImportBatch", back_populates="bookings")
     room = relationship("MeetingRoom", back_populates="bookings")
     applicant = relationship("User", back_populates="bookings", foreign_keys=[applicant_id])
     reviewer = relationship("User", back_populates="reviewed_bookings", foreign_keys=[reviewer_id])
+    cancelled_by = relationship("User", foreign_keys=[cancelled_by_id])
     department = relationship("Department", back_populates="bookings")
     equipments = relationship("BookingEquipment", back_populates="booking", cascade="all, delete-orphan")
+    changes = relationship("BookingChange", back_populates="booking", cascade="all, delete-orphan")
+
+
+class BookingChange(Base):
+    __tablename__ = "booking_changes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=False)
+    applicant_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    old_room_id = Column(Integer, ForeignKey("meeting_rooms.id"), nullable=True)
+    new_room_id = Column(Integer, ForeignKey("meeting_rooms.id"), nullable=True)
+    old_title = Column(String(200), nullable=True)
+    new_title = Column(String(200), nullable=True)
+    old_start_time = Column(DateTime, nullable=True)
+    new_start_time = Column(DateTime, nullable=True)
+    old_end_time = Column(DateTime, nullable=True)
+    new_end_time = Column(DateTime, nullable=True)
+    old_attendee_count = Column(Integer, nullable=True)
+    new_attendee_count = Column(Integer, nullable=True)
+    old_department_id = Column(Integer, ForeignKey("departments.id"), nullable=True)
+    new_department_id = Column(Integer, ForeignKey("departments.id"), nullable=True)
+    change_reason = Column(Text, nullable=True)
+    status = Column(String(20), default="pending")
+    conflict_info = Column(Text, nullable=True)
+    reviewer_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    review_time = Column(DateTime, nullable=True)
+    review_comment = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False)
+
+    booking = relationship("Booking", back_populates="changes")
+    applicant = relationship("User", foreign_keys=[applicant_id])
+    reviewer = relationship("User", foreign_keys=[reviewer_id])
+    old_room = relationship("MeetingRoom", foreign_keys=[old_room_id])
+    new_room = relationship("MeetingRoom", foreign_keys=[new_room_id])
+    old_department = relationship("Department", foreign_keys=[old_department_id])
+    new_department = relationship("Department", foreign_keys=[new_department_id])
+    equipment_changes = relationship("BookingEquipmentChange", back_populates="change", cascade="all, delete-orphan")
+
+
+class BookingEquipmentChange(Base):
+    __tablename__ = "booking_equipment_changes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    change_id = Column(Integer, ForeignKey("booking_changes.id"), nullable=False)
+    equipment_id = Column(Integer, ForeignKey("equipments.id"), nullable=False)
+    old_quantity = Column(Integer, nullable=True)
+    new_quantity = Column(Integer, nullable=True)
+    change_type = Column(String(20), nullable=False)
+
+    change = relationship("BookingChange", back_populates="equipment_changes")
+    equipment = relationship("Equipment")
 
 
 class BookingEquipment(Base):

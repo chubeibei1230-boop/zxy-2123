@@ -17,6 +17,8 @@ def query_bookings(
     status: Optional[str] = Query(None, description="状态: pending/conflict/approved/rejected"),
     start_date: Optional[str] = Query(None, description="开始日期 YYYY-MM-DD"),
     end_date: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD"),
+    is_cancelled: Optional[bool] = Query(None, description="是否已取消"),
+    is_modified: Optional[bool] = Query(None, description="是否已变更"),
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
@@ -44,6 +46,30 @@ def query_bookings(
         status=status,
         start_date=start_dt,
         end_date=end_dt,
+        is_cancelled=is_cancelled,
+        is_modified=is_modified,
+        skip=skip,
+        limit=limit
+    )
+
+
+@router.get("/changes", response_model=List[schemas.BookingChangeResponse])
+def query_changes(
+    booking_id: Optional[int] = Query(None, description="预约ID"),
+    status: Optional[str] = Query(None, description="状态: pending/conflict/approved/rejected"),
+    applicant_id: Optional[int] = Query(None, description="申请人ID"),
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    if status and status not in ["pending", "conflict", "approved", "rejected"]:
+        raise HTTPException(status_code=400, detail="无效的状态值")
+    return crud.get_booking_changes(
+        db,
+        booking_id=booking_id,
+        status=status,
+        applicant_id=applicant_id,
         skip=skip,
         limit=limit
     )

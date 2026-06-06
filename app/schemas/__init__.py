@@ -168,6 +168,68 @@ class BookingUpdate(BaseModel):
     review_comment: Optional[str] = None
 
 
+class BookingModifyRequest(BaseModel):
+    room_id: Optional[int] = None
+    title: Optional[str] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    attendee_count: Optional[int] = None
+    department_id: Optional[int] = None
+    equipments: Optional[List[BookingEquipmentCreate]] = None
+    change_reason: Optional[str] = None
+
+
+class BookingCancelRequest(BaseModel):
+    cancel_reason: str
+
+
+class BookingEquipmentChangeResponse(BaseModel):
+    id: int
+    equipment_id: int
+    equipment: EquipmentResponse
+    old_quantity: Optional[int] = None
+    new_quantity: Optional[int] = None
+    change_type: str
+
+    class Config:
+        from_attributes = True
+
+
+class BookingChangeResponse(BaseModel):
+    id: int
+    booking_id: int
+    applicant_id: int
+    applicant: Optional[UserResponse] = None
+    old_room_id: Optional[int] = None
+    new_room_id: Optional[int] = None
+    old_room: Optional[MeetingRoomResponse] = None
+    new_room: Optional[MeetingRoomResponse] = None
+    old_title: Optional[str] = None
+    new_title: Optional[str] = None
+    old_start_time: Optional[datetime] = None
+    new_start_time: Optional[datetime] = None
+    old_end_time: Optional[datetime] = None
+    new_end_time: Optional[datetime] = None
+    old_attendee_count: Optional[int] = None
+    new_attendee_count: Optional[int] = None
+    old_department_id: Optional[int] = None
+    new_department_id: Optional[int] = None
+    old_department: Optional[DepartmentResponse] = None
+    new_department: Optional[DepartmentResponse] = None
+    change_reason: Optional[str] = None
+    status: str
+    conflict_info: Optional[str] = None
+    reviewer_id: Optional[int] = None
+    reviewer: Optional[UserResponse] = None
+    review_time: Optional[datetime] = None
+    review_comment: Optional[str] = None
+    created_at: datetime
+    equipment_changes: List[BookingEquipmentChangeResponse] = []
+
+    class Config:
+        from_attributes = True
+
+
 class BookingResponse(BookingBase):
     id: int
     status: str
@@ -178,10 +240,18 @@ class BookingResponse(BookingBase):
     review_comment: Optional[str] = None
     created_at: datetime
     batch_id: Optional[int] = None
+    is_cancelled: bool = False
+    cancelled_by_id: Optional[int] = None
+    cancelled_by: Optional[UserResponse] = None
+    cancelled_at: Optional[datetime] = None
+    cancel_reason: Optional[str] = None
+    is_modified: bool = False
+    last_modified_at: Optional[datetime] = None
     applicant: Optional[UserResponse] = None
     department: Optional[DepartmentResponse] = None
     room: Optional[MeetingRoomResponse] = None
     equipments: List[BookingEquipmentResponse] = []
+    changes: List[BookingChangeResponse] = []
 
     class Config:
         from_attributes = True
@@ -261,6 +331,7 @@ class OccupancyStatsResponse(BaseModel):
     pending_count: int
     approved_count: int
     rejected_count: int
+    modified_count: int
     occupancy_rate: float
 
 

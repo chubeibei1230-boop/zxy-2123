@@ -204,6 +204,8 @@ def get_my_bookings(
     status: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    is_cancelled: Optional[bool] = None,
+    is_modified: Optional[bool] = None,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
@@ -227,6 +229,78 @@ def get_my_bookings(
         status=status,
         start_date=start_dt,
         end_date=end_dt,
+        is_cancelled=is_cancelled,
+        is_modified=is_modified,
+        skip=skip,
+        limit=limit
+    )
+
+
+@router.post("/bookings/{booking_id}/modify", response_model=schemas.BookingChangeResponse)
+def modify_booking(
+    booking_id: int,
+    modify_data: schemas.BookingModifyRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role(["admin", "employee_a"]))
+):
+    booking = crud.get_booking(db, booking_id=booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail="预约不存在")
+    if booking.applicant_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="无权修改他人的预约")
+    if booking.is_cancelled:
+        raise HTTPException(status_code=400, detail="已取消的预约无法修改")
+    if booking.end_time < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="已结束的预约无法修改")
+    
+    is_valid, errors, changes = crud.validate_booking_modification(db, booking, modify_data)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail="; ".join(errors))
+    
+    booking_change = crud.create_booking_change(db, booking, modify_data, current_user.id)
+    return booking_change
+
+
+@router.post("/bookings/{booking_id}/cancel", response_model=schemas.BookingResponse)
+def cancel_booking(
+    booking_id: int,
+    cancel_data: schemas.BookingCancelRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role(["admin", "employee_a"]))
+):
+    booking = crud.get_booking(db, booking_id=booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail="预约不存在")
+    if booking.applicant_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="无权取消他人的预约")
+    if booking.is_cancelled:
+        raise HTTPException(status_code=400, detail="该预约已取消")
+    if booking.end_time < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="已结束的预约无法取消")
+    
+    updated = crud.cancel_booking(
+        db,
+        booking_id=booking_id,
+        cancelled_by_id=current_user.id,
+        cancel_reason=cancel_data.cancel_reason
+    )
+    if not updated:
+        raise HTTPException(status_code=500, detail="取消预约失败")
+    return updated
+
+
+@router.get("/my-changes", response_model=List[schemas.BookingChangeResponse])
+def get_my_changes(
+    status: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role(["admin", "employee_a"]))
+):
+    return crud.get_booking_changes(
+        db,
+        applicant_id=current_user.id,
+        status=status,
         skip=skip,
         limit=limit
     )
