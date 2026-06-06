@@ -177,6 +177,7 @@ def check_time_conflict(
     booking_query = db.query(models.Booking).filter(
         models.Booking.room_id == room_id,
         models.Booking.status != "rejected",
+        models.Booking.is_cancelled == False,
         or_(
             and_(models.Booking.start_time < end_time, models.Booking.end_time > start_time)
         )
@@ -497,8 +498,9 @@ def validate_booking_modification(
     db: Session,
     booking: models.Booking,
     modify_data: schemas.BookingModifyRequest
-) -> Tuple[bool, List[str], dict]:
+) -> Tuple[bool, List[str], dict, List[str]]:
     errors = []
+    conflicts = []
     changes = {}
 
     new_room_id = modify_data.room_id if modify_data.room_id is not None else booking.room_id
@@ -561,11 +563,11 @@ def validate_booking_modification(
             elif eq_req.quantity > room_eq.quantity:
                 errors.append(f"设备 {equip.name} 数量不足，会议室最多提供 {room_eq.quantity} 个")
 
-    has_conflict, conflicts = check_time_conflict(
+    has_conflict, conflict_list = check_time_conflict(
         db, new_room_id, new_start_time, new_end_time, exclude_booking_id=booking.id
     )
     if has_conflict:
-        errors.extend(conflicts)
+        conflicts = conflict_list
 
     if modify_data.room_id is not None and modify_data.room_id != booking.room_id:
         changes["room_id"] = {"old": booking.room_id, "new": modify_data.room_id}
@@ -583,7 +585,7 @@ def validate_booking_modification(
     if not changes and modify_data.equipments is None:
         errors.append("没有任何变更内容")
 
-    return len(errors) == 0, errors, changes
+    return len(errors) == 0, errors, changes, conflicts
 
 
 def create_booking_change(
@@ -690,6 +692,25 @@ def review_booking_change(
         return None
     if db_change.status not in ["pending", "conflict"]:
         return None
+    
+    if status == "approved":
+        has_conflict, conflicts = check_time_conflict(
+            db,
+            db_change.new_room_id,
+            db_change.new_start_time,
+            db_change.new_end_time,
+            exclude_booking_id=db_change.booking_id
+        )
+        if has_conflict:
+            db_change.status = "conflict"
+            db_change.conflict_info = "; ".join(conflicts)
+            db_change.reviewer_id = reviewer_id
+            db_change.review_time = datetime.utcnow()
+            if review_comment:
+                db_change.review_comment = review_comment
+            db.commit()
+            db.refresh(db_change)
+            return db_change
     
     db_change.status = status
     db_change.reviewer_id = reviewer_id

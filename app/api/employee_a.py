@@ -59,6 +59,33 @@ def validate_booking_row(db: Session, row: dict, row_num: int) -> tuple[Optional
         errors.append("结束时间必须晚于开始时间")
     if room and attendee_count > room.capacity:
         errors.append(f"参会人数({attendee_count})超过会议室容量({room.capacity})")
+    
+    rule = crud.get_active_booking_rule(db)
+    if rule and start_time and end_time:
+        start_time_only = start_time.time()
+        end_time_only = end_time.time()
+        rule_start = datetime.strptime(rule.start_time_limit, "%H:%M").time()
+        rule_end = datetime.strptime(rule.end_time_limit, "%H:%M").time()
+        if start_time_only < rule_start or end_time_only > rule_end:
+            errors.append(f"预约时间需在 {rule.start_time_limit} - {rule.end_time_limit} 之间")
+        
+        if not rule.allow_weekend:
+            if start_time.weekday() >= 5 or end_time.weekday() >= 5:
+                errors.append("不允许周末预约")
+        
+        duration_hours = (end_time - start_time).total_seconds() / 3600
+        if duration_hours < rule.min_booking_hours:
+            errors.append(f"预约时长不足最短时长 {rule.min_booking_hours} 小时")
+        if duration_hours > rule.max_booking_hours:
+            errors.append(f"预约时长超过最长时长 {rule.max_booking_hours} 小时")
+        
+        days_ahead = (start_time.date() - datetime.utcnow().date()).days
+        if days_ahead > rule.max_booking_days:
+            errors.append(f"最多可提前 {rule.max_booking_days} 天预约")
+        
+        if rule.max_attendees_per_room and attendee_count > rule.max_attendees_per_room:
+            errors.append(f"参会人数超过最大限制 {rule.max_attendees_per_room} 人")
+    
     equipment_list = []
     if "设备需求" in row and str(row["设备需求"]).strip():
         equip_str = str(row["设备需求"]).strip()
@@ -253,7 +280,7 @@ def modify_booking(
     if booking.end_time < datetime.utcnow():
         raise HTTPException(status_code=400, detail="已结束的预约无法修改")
     
-    is_valid, errors, changes = crud.validate_booking_modification(db, booking, modify_data)
+    is_valid, errors, changes, conflicts = crud.validate_booking_modification(db, booking, modify_data)
     if not is_valid:
         raise HTTPException(status_code=400, detail="; ".join(errors))
     
